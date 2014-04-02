@@ -1,0 +1,729 @@
+
+
+rm(list=ls())
+library(foreign)
+library(psych)
+library(lavaan)
+library(lavaan.survey)
+
+library(stringr)
+
+getCR <- function(fit) {
+  l<-inspect(fit,"coef")$lambda
+  v<-diag(inspect(fit,"coef")$theta)
+  cr<-sum(l)^2/(sum(l)^2+sum(v))
+  return(cr)
+  }
+
+rm(list=ls())
+#setwd("C:/Users/jmiles/Documents/research/trace/data")
+setwd("//vincent/b/jmiles/trace")
+
+source("covcov.R")
+
+d <- read.dta("all_trace.dta")
+
+d$idvar <- 1:nrow(d)
+
+d$const <- 1
+
+save(  d, file="all_data.RData")
+
+
+load("all_data.RData")
+
+
+#First analysis: difficult of doing business
+#3 subdomains: contact with gov, expectation of bribes, reg burden
+
+
+diffVars <- c("year", "wbcode", "edbi_docs_export",
+                 "edbi_docs_import",
+                 "edbi_proc_warehouse",
+                 "edbi_proc_contract",
+                 "edbi_proc_property",
+                 "edbi_procs_regbiz",
+                 "wbes_srmgt_time_regs",
+                 "wbes_nvisits_tax"
+                 #expectation
+                 "wbes_bribe_incidence",
+                 "wbes_bribe_depth",
+                 "wbes_gift_tax",
+                 "wbes_gift_govcontract",
+                 "wbes_gift_oplic",
+                 "wbes_gift_implic",
+                 "wbes_gift_construct",
+                 "wbes_gift_elec",
+                 "wbes_gift_water",
+                 "wbes_gift_things",
+                 "wbes_corruption_constraint",
+                 "ef_5civ",
+                 "wjprol_2",
+                 #reg burden
+                 "ef_5ci",
+                 "wbes_customs",
+                 "ef_4bii",
+                 "ef_4d",
+                 "ef_5bi",
+                 "ef_5bii",
+                 "gir_367",
+                 "gir_371",
+                 "wbes_labor_regs",
+                 "wjprol_6",
+#                 "data141",
+                 "ef_3d",
+                 "ef_4di",
+                 "gir_362", "wefgc_5", "wefgc_7", "wefgc_17", "ti_cpi", 
+              "bti7", "cpia_23", "ef_4", "ef_5", "wefgc_109", "bti_econstat", "cpia_41", 
+              "obi", "wjprol_1", "wjprol_5", "wefgc_12",
+              "bti3", "bti_15", "cpia_44", "cpia_45", "wjprol_2", "wjprol_7")
+                 
+
+
+
+  contactVars <- c("year", "wbcode", "edbi_docs_export",
+           "edbi_docs_import",
+           "edbi_proc_warehouse",
+           "edbi_proc_contract",
+           "edbi_proc_property",
+           "edbi_procs_regbiz",
+           "wbes_srmgt_time_regs",
+           "wbes_nvisits_tax")
+
+expectVars <- c("year", "wbcode", "wefgc_5", "wefgc_7", "wefgc_17", "ti_cpi")
+
+regburdenVars <-  c("ef_5ci",
+                    "wbes_customs",
+                    "ef_4bii",
+                    "ef_4d",
+                    "ef_5bi",
+                    "ef_5bii",
+                    "gir_367",
+                    "gir_371",
+                    "wbes_labor_regs",
+                    "wjprol_6",
+#                    "data141",
+                    "ef_3d",
+                    "ef_4di",
+                    "gir_362")
+
+
+#Cut down d, to include only difficulty of doing business vars
+d1 <- d[diffVars]
+nrow(d1)
+length(d1)
+
+d1 <- subset(d1, d1$wbcode != "")
+d1 <- subset(d1, !is.na(year))
+
+#d1temp is only reg burden variables
+d1temp <- d1[regburdenVars]
+#lose year and wbcode from d1temp
+d1temp <- d1temp[, ! (names(d1temp) 
+                      %in% c("year", "wbcode"))]
+
+nmiss <- apply(d1, 1, function(x) sum(is.na(x)))
+table(nmiss)
+nMissVars <- apply(d1temp, 2, function(x) sum(is.na(x)))
+nNotMissVars <- apply(d1temp, 2, function(x) sum(!is.na(x)))
+
+
+#Remove year/country if it's missing a lot of vars
+d1 <- d1[nmiss < 40, ]
+
+covcov(d1)
+
+
+d <- d1
+
+d$edbi_proc_warehouse <- d$edbi_proc_warehouse / 10
+d$edbi_proc_contract <- d$edbi_proc_contract / 10
+d$wbes_srmgt_time_regs <- d$wbes_srmgt_time_regs / 3
+d$obi <- d$obi / 10
+d$wjprol_1 <- wjprol_1 * 10
+d$wjprol_5 <- d$wjprol_5 * 10
+
+apply(d[contactVars], 2, function(x) var(x, na.rm=TRUE))
+
+
+
+
+#equalize variance before imputation
+d$ti_cpi <- d$ti_cpi / 10
+
+library(mice)
+d.imp <- mice(d, m=20)
+
+
+
+summary(d.imp$imp)
+
+
+d.implist <- lapply(seq(d.imp$m), function(im) 
+  complete(d.imp, im))
+summary(d.implist)
+
+
+library(mitools)
+d.implist <- imputationList(d.implist)
+summary(unlist(d.implist))
+
+save.image()
+
+setwd("//vincent/b/jmiles/trace")
+load(file=".RData")
+
+
+survey.country <- svydesign(ids=~wbcode, probs=~1 , data=d.implist)
+summary(survey.country)
+
+
+
+################################################################################
+#First fit contacts
+#Fit Model to get starting values
+
+
+modelContact <- 'contact =~  edbi_docs_export +
+  edbi_docs_import +
+  edbi_proc_warehouse +
+  edbi_proc_contract +
+  edbi_proc_property +
+  edbi_procs_regbiz  
+  edbi_docs_export ~~  edbi_docs_import
+'
+
+cfaContactStarts <- cfa(modelContact, data=d1, 
+                        estimator="ML")
+summary(cfaContactStarts)
+
+
+
+
+
+cfaFitContact <- lavaan.survey(cfaContactStarts, survey.country)
+summary(cfaFitContact, fit=TRUE, standardized=TRUE)
+stLambda <- standardizedSolution(cfaFitContact)[[4]][1:6]
+
+crContact <- sum(stLambda)^2 / (
+  sum(stLambda)^2 + sum( (1 - stLambda^2) ) )
+crContact
+
+
+lambda <- inspect(cfaFitContact,"coef")$lambda
+psi      <- inspect(cfaFitContact,"coef")$psi
+theta <- (inspect(cfaFitContact,"coef")$theta)
+
+modelContactFitted <- paste0("contact =~  edbi_docs_export +", 
+  lambda[2] , "*edbi_docs_import +" ,
+  lambda[3] , "*edbi_proc_warehouse +",
+  lambda[4] , "*edbi_proc_contract +",
+  lambda[5] , "*edbi_proc_property +" ,
+  lambda[6] , "*edbi_procs_regbiz \n",
+  "contact ~~ ", psi, "* contact \n",
+  "edbi_docs_export ~~   ", theta[1, 1] ,"  * edbi_docs_export \n",
+  "edbi_docs_import ~~  ", theta[2, 2] , "  * edbi_docs_export \n",
+  "edbi_docs_import ~~  ", theta[1, 2] , "  * edbi_docs_import \n",
+  "edbi_proc_warehouse ~~  ", theta[3, 3] , " *   edbi_proc_warehouse  \n",
+  "edbi_proc_contract ~~   ", theta[4, 4 ] , " *   edbi_proc_contract  \n",
+  "edbi_proc_property ~~   ", theta[5, 5] , " *   edbi_proc_property \n",
+  "edbi_procs_regbiz ~~   ", theta[6, 6 ] , " *   edbi_procs_regbiz" )
+  
+
+
+#extract imputed data
+
+contactTests <- data.frame(1:nrow(d1))
+for(loop in c(1:20)){
+  temp <- cfa(modelContactFitted , data=complete(d.imp, action=loop))
+  contactTests <- cbind(contactTests, predict(temp))
+}
+
+
+contactTests <- as.data.frame(contactTests)
+contactTests$X1.nrow.d1. <- NULL
+contactSum <- as.data.frame(cbind(d1$year, d1$wbcode, 
+                    as.data.frame(apply(contactTests, 1, mean))))
+names(contactSum) <- c("year", "wbcode", "contact")
+
+contactSum$wbcode <- as.character(contactSum$wbcode)
+
+par(mfrow=c(1, 1))
+hist(contactSum$contact, main="", xlab="")
+
+
+contactSumMax <- as.data.frame(tapply(contactSum$year, contactSum$wbcode, FUN=max ))
+contactSumMax$wbcode <- rownames(contactSumMax)
+
+names(contactSumMax)[1] <- "maxYear"
+
+contactSum <- merge(contactSumMax, contactSum, by="wbcode")
+contactSum2 <- subset(contactSum, contactSum$year == contactSum$maxYear)
+
+write.csv(contactSum2, "contactScores.csv")
+
+
+write.csv(contactSum, "contact with gov factor.csv")
+
+
+obs <- ls()
+rm(list=obs[!is.na(str_match(tolower(obs) , "contact" ))])
+rm(psi)
+rm(psi, lambda, theta)
+
+################ End of contacts ##########################
+
+
+
+
+
+
+## Now do expectancy of paying bribes
+################################################################################
+#Fit Model to get starting values
+
+modelExpect <- '
+expect =~  wefgc_5 + wefgc_7 + wefgc_17 + ti_cpi
+'
+
+
+
+
+
+apply(d[c("wbcode", "wefgc_5", "wefgc_7", "wefgc_17", "ti_cpi")], 2, var)
+
+cor(d[c("wefgc_5", "wefgc_7", "wefgc_17", "ti_cpi")], use="complete.obs")
+
+cfaExpectStarts <- cfa(modelExpect, data=d, 
+                        estimator="ML")
+
+summary(cfaExpectStarts)
+
+survey.country <- svydesign(ids=~wbcode, probs=~1 , data=d)
+
+cfaFitExpect <- lavaan.survey(cfaExpectStarts, survey.country)
+summary(cfaFitExpect, fit=TRUE, standardized=TRUE)
+stLambda <- standardizedSolution(cfaFitExpect)[[4]][1:4]
+
+crExpect <- sum(stLambda)^2 / (
+  sum(stLambda)^2 + sum( (1 - stLambda^2) ) )
+crExpect
+
+  
+
+lambda <- inspect(cfaFitExpect,"coef")$lambda
+psi      <- inspect(cfaFitExpect,"coef")$psi
+theta <- diag(inspect(cfaFitExpect,"coef")$theta)
+
+modelExpectFitted <- paste0("expect =~  wefgc_5 +", 
+                             lambda[2] , "*wefgc_7 +" ,
+                             lambda[3] , "*wefgc_17 +",
+                             lambda[4] , "*ti_cpi \n",
+                            
+                             "expect ~~ ", psi, "* expect \n",
+                             "wefgc_5 ~~   ", theta[1] ,"  * wefgc_5  \n",
+                             "wefgc_7 ~~  ", theta[2] , "  * wefgc_7 \n"                             ,
+                             "wefgc_17 ~~  ", theta[3] , " *   wefgc_17  \n",
+                             "ti_cpi ~~   ", theta[4] , " *  ti_cpi  " )
+
+
+
+#extract imputed data
+
+expectTests <- data.frame(1:nrow(d1))
+for(loop in c(1:20)){
+  temp <- cfa(modelExpectFitted , data=complete(d.imp, action=loop))
+  expectTests <- cbind(expectTests, predict(temp))
+}
+
+
+expectTests <- as.data.frame(expectTests)
+expectTests$X1.nrow.d1. <- NULL
+expectSum <- as.data.frame(cbind(d1$year, d1$wbcode, 
+                                  as.data.frame(apply(expectTests, 1, mean))))
+names(expectSum) <- c("year", "wbcode", "expect")
+
+expectSum$wbcode <- as.character(expectSum$wbcode)
+write.csv(expectSum, "expect bribes  factor.csv")
+
+obs <- ls()
+rm(list=obs[!is.na(str_match(tolower(obs) , "expect" ))])
+rm(psi)
+rm(psi, lambda, theta)
+
+
+################ End of Expectancy of paying bribes ##########################
+
+
+
+
+
+
+## 1.3 regulatory burden
+
+
+################################################################################
+
+#Fit Model to get starting values
+
+
+
+#bti7 cpia_23 ef_4 ef_5 wefgc_109 bti_econstat
+#Covariance between bti7 and bti_econstat
+
+modelRegBurd <- '
+expect =~ bti7 + cpia_23 + ef_4 + ef_5 + wefgc_109 + bti_econstat
+bti7 ~~ bti_econstat
+  '
+
+
+
+apply(d[c("bti7", "cpia_23", "ef_4", "ef_5", "wefgc_109", 
+          "bti_econstat")], 2, function(x) var(x, na.rm=TRUE))
+
+cor(d[c("bti7", "cpia_23", "ef_4", "ef_5", "wefgc_109", 
+        "bti_econstat")], use="complete.obs")
+
+cfaRegBurdStarts <- cfa(modelRegBurd, data=d, 
+                       estimator="ML")
+
+summary(cfaRegBurdStarts)
+
+survey.country <- svydesign(ids=~wbcode, probs=~1 , data=d)
+
+cfaFitRegBurd <- lavaan.survey(cfaRegBurdStarts, survey.country)
+summary(cfaFitRegBurd, fit=TRUE, standardized=TRUE)
+stLambda <- standardizedSolution(cfaFitRegBurd)[[4]][1:6]
+
+crRegBurd <- sum(stLambda)^2 / (
+  sum(stLambda)^2 + sum( (1 - stLambda^2) ) )
+crRegBurd
+
+
+
+lambda <- inspect(cfaFitRegBurd,"coef")$lambda
+psi      <- inspect(cfaFitRegBurd,"coef")$psi
+theta <- (inspect(cfaFitRegBurd,"coef")$theta)
+
+modelRegBurdFitted <- paste0("RegBurd =~  bti7 +", 
+                            lambda[2] , "* cpia_23 +" ,
+                            lambda[3] , "* ef_4 +",
+                            lambda[4] , "* ef_5 +" ,
+                            lambda[5] , "* wefgc_109 +",
+                            lambda[6] , "* bti_econstat \n",
+
+                            "RegBurd ~~ ", psi, "* RegBurd \n",
+
+                            "bti7 ~~   ", theta[1, 1] ,"  * bti7  \n",
+                            "cpia_23 ~~  ", theta[2, 2] , "  * cpia_23 \n"                             ,
+                            "ef_4  ~~  ",   theta[3, 3] , " *   ef_4   \n",
+                            "ef_5  ~~  ",   theta[4, 4] , " *   ef_5   \n",
+                            "wefgc_109 ~~   ", theta[5,5 ] , " *  wefgc_109 \n  " , 
+                            "bti_econstat ~~   ", theta[6, 6] , " *  bti_econstat \n  " ,
+                            "bti_econstat ~~   ", theta[6, 1] , " *  bti7 \n  " )
+
+
+
+#extract imputed data
+
+RegBurdTests <- data.frame(1:nrow(d1))
+for(loop in c(1:20)){
+  temp <- cfa(modelRegBurdFitted , data=complete(d.imp, action=loop))
+  RegBurdTests <- cbind(RegBurdTests, predict(temp))
+}
+
+
+RegBurdTests <- as.data.frame(RegBurdTests)
+RegBurdTests$X1.nrow.d1. <- NULL
+RegBurdSum <- as.data.frame(cbind(d1$year, d1$wbcode, 
+                                 as.data.frame(apply(RegBurdTests, 1, mean))))
+names(RegBurdSum) <- c("year", "wbcode", "RegBurd")
+
+RegBurdSum$wbcode <- as.character(RegBurdSum$wbcode)
+write.csv(RegBurdSum, "RegBurd   factor.csv")
+
+obs <- ls()
+rm(list=obs[!is.na(str_match(tolower(obs) , "RegBurd" ))])
+rm(psi)
+rm(psi, lambda, theta)
+
+
+################ End of REgulatory burden of paying bribes ##########################
+
+
+
+
+
+
+
+
+
+
+#Subdomain 3.1:
+#  cpia_41 obi wjprol_1 wjprol_5 wefgc_12
+################################################################################
+
+#Fit Model to get starting values
+
+
+
+
+modelTransGov <- '
+TransGov =~  cpia_41 + obi + wjprol_1 + wjprol_5 + wefgc_12
+
+'
+
+
+
+apply(d[c( "cpia_41", "obi", "wjprol_1", "wjprol_5", "wefgc_12")], 2, function(x) var(x, na.rm=TRUE))
+
+cor(d[c("cpia_41", "obi", "wjprol_1", "wjprol_5", "wefgc_12")], use="complete.obs")
+
+cfaTransGovStarts <- cfa(modelTransGov, data=d, 
+                        estimator="ML")
+
+summary(cfaTransGovStarts)
+
+survey.country <- svydesign(ids=~wbcode, probs=~1 , data=d)
+
+cfaFitTransGov <- lavaan.survey(cfaTransGovStarts, survey.country)
+summary(cfaFitTransGov, fit=TRUE, standardized=TRUE)
+stLambda <- standardizedSolution(cfaFitTransGov)[[4]][1:6]
+
+crTransGov <- sum(stLambda)^2 / (
+  sum(stLambda)^2 + sum( (1 - stLambda^2) ) )
+crTransGov
+
+
+
+lambda <- inspect(cfaFitTransGov,"coef")$lambda
+psi      <- inspect(cfaFitTransGov,"coef")$psi
+theta <- (inspect(cfaFitTransGov,"coef")$theta)
+
+modelTransGovFitted <- paste0("TransGov =~  cpia_41 +", 
+                             lambda[2] , "* obi +" ,
+                             lambda[3] , "* wjprol_1 +",
+                             lambda[4] , "* wjprol_5 +" ,
+                             lambda[5] , "* wefgc_12 \n",
+                             
+                             "TransGov ~~ ", psi, "* TransGov \n",
+                             
+                             "cpia_41 ~~   ", theta[1, 1] ,"  * cpia_41  \n",
+                             "obi ~~  ", theta[2, 2] , "  * obi \n"                             ,
+                             "wjprol_1  ~~  ",   theta[3, 3] , " *   wjprol_1   \n",
+                             "wjprol_5 ~~   ", theta[4, 4 ] , " *  wjprol_5 \n  " , 
+                             "wefgc_12 ~~   ", theta[5, 5] , " *  wefgc_12 \n  " )
+
+
+
+#extract imputed data
+
+TransGovTests <- data.frame(1:nrow(d1))
+for(loop in c(1:20)){
+  temp <- cfa(modelTransGovFitted , data=complete(d.imp, action=loop))
+  TransGovTests <- cbind(TransGovTests, predict(temp))
+}
+
+
+TransGovTests <- as.data.frame(TransGovTests)
+TransGovTests$X1.nrow.d1. <- NULL
+TransGovSum <- as.data.frame(cbind(d1$year, d1$wbcode, 
+                                  as.data.frame(apply(TransGovTests, 1, mean))))
+names(TransGovSum) <- c("year", "wbcode", "TransGov")
+
+TransGovSum$wbcode <- as.character(TransGovSum$wbcode)
+write.csv(TransGovSum, "TransGov   factor.csv")
+
+obs <- ls()
+rm(list=obs[!is.na(str_match(tolower(obs) , "TransGov" ))])
+rm(psi)
+rm(psi, lambda, theta)
+
+
+################ End of REgulatory burden of paying bribes ##########################
+
+
+
+
+
+#Subdomain 3.2, transHCS
+#bti3 bti_15 cpia_44 cpia_45 wjprol_2 wjprol_7
+#Covariance between wjprol_2 and wjprol_7 errors
+
+################################################################################
+
+#Fit Model to get starting values
+
+
+
+modeltransHCS <- '
+expect =~  bti3 + bti_15 + cpia_44 + cpia_45 + wjprol_2 + wjprol_7
+ bti3 ~~   bti_15
+ wjprol_2 ~~ wjprol_7
+'
+
+
+
+apply(d[c("bti3", "bti_15", "cpia_44", "cpia_45", "wjprol_2", "wjprol_7")], 2, function(x) var(x, na.rm=TRUE))
+
+cor(d[c("bti3", "bti_15", "cpia_44", "cpia_45", "wjprol_2", "wjprol_7")], use="complete.obs")
+
+cfatransHCSStarts <- cfa(modeltransHCS, data=d, 
+                        estimator="ML")
+
+summary(cfatransHCSStarts)
+
+survey.country <- svydesign(ids=~wbcode, probs=~1 , data=d)
+
+cfaFittransHCS <- lavaan.survey(cfatransHCSStarts, survey.country)
+summary(cfaFittransHCS, fit=TRUE, standardized=TRUE)
+stLambda <- standardizedSolution(cfaFittransHCS)[[4]][1:6]
+
+crtransHCS <- sum(stLambda)^2 / (
+  sum(stLambda)^2 + sum( (1 - stLambda^2) ) )
+crtransHCS
+
+modindices(cfaFittransHCS)
+
+lambda <- inspect(cfaFittransHCS,"coef")$lambda
+psi      <- inspect(cfaFittransHCS,"coef")$psi
+theta <- (inspect(cfaFittransHCS,"coef")$theta)
+
+modeltransHCSFitted <- paste0("transHCS =~  bti3 +", 
+                             lambda[2] , "* bti_15 +" ,
+                             lambda[3] , "* cpia_44 +",
+                             lambda[4] , "* cpia_45 +" ,
+                             lambda[5] , "* wjprol_2 +",
+                             lambda[6] , "* wjprol_7 \n",
+                             
+                             "transHCS ~~ ", psi, "* transHCS \n",
+                             
+                             "bti3 ~~   ", theta[1, 1] ,"  * bti3  \n",
+                             "bti_15 ~~  ", theta[2, 2] , "  * bti_15 \n"                             ,
+                             "cpia_44  ~~  ",   theta[3, 3] , " *   cpia_44   \n",
+                             "cpia_45  ~~  ",   theta[4, 4] , " *   cpia_45   \n",
+                             "wjprol_2 ~~   ", theta[5,5 ] , " *  wjprol_2 \n  " , 
+                             "wjprol_7 ~~   ", theta[6, 6] , " *  wjprol_7 \n  " ,
+                             "wjprol_2 ~~   ", theta[6, 1] , " *  wjprol_7 \n  " )
+
+summary(modeltransHCSFitted)
+
+
+
+#extract imputed data
+
+transHCSTests <- data.frame(1:nrow(d1))
+for(loop in c(1:20)){
+  temp <- cfa(modeltransHCSFitted , data=complete(d.imp, action=loop))
+  transHCSTests <- cbind(transHCSTests, predict(temp))
+}
+
+
+transHCSTests <- as.data.frame(transHCSTests)
+transHCSTests$X1.nrow.d1. <- NULL
+transHCSSum <- as.data.frame(cbind(d1$year, d1$wbcode, 
+                                  as.data.frame(apply(transHCSTests, 1, mean))))
+names(transHCSSum) <- c("year", "wbcode", "transHCS")
+
+transHCSSum$wbcode <- as.character(transHCSSum$wbcode)
+write.csv(transHCSSum, "transHCS   factor.csv")
+
+obs <- ls()
+rm(list=obs[!is.na(str_match(tolower(obs) , "transHCS" ))])
+rm(psi)
+rm(psi, lambda, theta)
+
+
+################ End of Trans HCS burden of paying bribes ##########################
+
+
+
+
+
+
+
+
+#######################
+
+#COmbine the variables
+#Look at 4 variables
+
+d1f <- read.csv("contact with gov factor.csv")
+d2f <- read.csv( "RegBurd   factor.csv")
+d3f <- read.csv("expect bribes  factor.csv")
+d4f <- read.csv("TransGov   factor.csv")
+d5f <- read.csv("transHCS   factor.csv")
+
+names(d2f)
+
+d_all <- cbind(d1f[c("year", "wbcode", "contact")], 
+               d2f$RegBurd, 
+               d3f$expect,
+               d4f$TransGov, 
+               d5f$transHCS)
+
+names(d_all) <- c("year", "wbcode", "contact", "regBurd", "expect", "TransGov", "transHCS")
+
+round(cor(d_all[3:7]), 2)
+
+fit <- fa(d_all[3:7], nfactors=1)
+eigen(cor(d_all[3:7])) 
+summary(fit)
+
+
+model5subDomains <- '
+totalF =~  contact + regBurd + expect + TransGov + transHCS
+'
+
+cfa5subDomains <- cfa(model5subDomains, data=d_all, 
+                         estimator="MLR")
+summary(cfa5subDomains, fit=TRUE, standardized=TRUE)
+
+
+
+#Drop all except last year
+maxYear <- as.data.frame(tapply(d_all$year, d_all$wbcode, max, simplify=TRUE))
+maxYear$wbcode <- rownames(maxYear)
+names(maxYear)[1] <- "maxYear"
+
+d_all <-   subset(merge(d_all, maxYear, by="wbcode"), maxYear == year)
+
+names(d_all)[4:7] <- c("RegBurd", "expect", "TransGov", "TransHCS")
+                      
+
+d_all$contact  <- d_all$contact  / sd(d_all$contact )
+d_all$expect  <- d_all$expect  / sd(d_all$expect )
+d_all$TransGov  <- d_all$TransGov  / sd(d_all$TransGov )
+d_all$TransHCS  <- d_all$TransHCS  / sd(d_all$TransHCS )
+d_all$RegBurd  <- d_all$RegBurd  / sd(d_all$RegBurd )
+
+apply(d_all, 2, sd)
+
+
+fitClus <- Mclust(d_all[3:7], G=3)
+
+round(summary(fitClus, parameters=TRUE)$mean, 2)
+
+summary(fitClus, parameters=TRUE)
+
+means <- as.data.frame(summary(fitClus, parameters=TRUE)$mean)
+means$var <- as.factor(rownames(means))
+par(mfrow=c(3, 1))
+plot(  means$var, means[, 1],col=1, type="l" , ylim=c(-2.5, 3.5))
+plot(  means$var, means[, 2],col=1, type="l" , ylim=c(-2.5, 3.5))
+plot(  means$var, means[, 3],col=1, type="l" , ylim=c(-2.5, 3.5))
+plot(  means$var, means[, 4],col=1, type="l" , ylim=c(-2.5, 3.5))
+
+
+plot(fitClus)
+
+
+summary(fitClus, newdata = y, newclass = yClass)
+
+
+d_all_preds <- cbind(d_all, predict(fitClus))
+d_all_preds$best_class <-apply(d_all_preds[c("z.1", "z.2", "z.3", "z.4")], 1, function(x) which(x == max(x)))
+table(d_all_preds$wbcode, d_all_preds$best_class)
+
+
+
